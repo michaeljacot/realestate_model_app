@@ -45,6 +45,11 @@ with c_left:
             "sqft": None,
             "year_built": None,
             "notes": "",
+            "purchase_price": None,
+            "down_payment_percent": None,
+            "annual_interest_percent": None,
+            "amort_years": None,
+            "closing_costs_percent_of_price": None,
         }
     else:
         sel_id = int(prop_choice.split(":")[0])
@@ -64,6 +69,43 @@ with c_left:
             baths = st.number_input("Baths", value=int(prop_data.get("baths") or 0), step=1)
             year_built = st.number_input("Year built", value=int(prop_data.get("year_built") or 1980), step=1, min_value=1800, max_value=2100)
         notes = st.text_area("Notes", value=prop_data.get("notes") or "", height=100)
+
+        st.markdown("---")
+        st.subheader("Purchase details")
+        purchase_price = st.number_input(
+            "Purchase price ($)",
+            min_value=10000.0,
+            value=float(prop_data.get("purchase_price") or 300000.0),
+            step=1000.0,
+        )
+        down_pct = st.slider(
+            "Down payment (%)",
+            0.0,
+            100.0,
+            float(prop_data.get("down_payment_percent") if prop_data.get("down_payment_percent") is not None else 20.0),
+            0.5,
+        )
+        rate_pct = st.slider(
+            "Interest rate - annual (%)",
+            0.0,
+            20.0,
+            float(prop_data.get("annual_interest_percent") if prop_data.get("annual_interest_percent") is not None else 5.0),
+            0.1,
+        )
+        amort_years = st.slider(
+            "Amortization (years)",
+            1,
+            35,
+            int(prop_data.get("amort_years") if prop_data.get("amort_years") is not None else 25),
+            1,
+        )
+        closing_pct = st.slider(
+            "Closing costs (%)",
+            0.0,
+            10.0,
+            float(prop_data.get("closing_costs_percent_of_price") if prop_data.get("closing_costs_percent_of_price") is not None else 2.0),
+            0.5,
+        )
         submitted_prop = st.form_submit_button("Save property")
         if submitted_prop:
             up = {
@@ -77,6 +119,11 @@ with c_left:
                 "sqft": sqft or None,
                 "year_built": year_built or None,
                 "notes": notes or None,
+                "purchase_price": purchase_price,
+                "down_payment_percent": down_pct,
+                "annual_interest_percent": rate_pct,
+                "amort_years": amort_years,
+                "closing_costs_percent_of_price": closing_pct,
             }
             new_id = sim_db.upsert_property(up, DB_PATH)
             st.success(f"Property saved (id {new_id}).")
@@ -91,138 +138,122 @@ with c_left:
                 st.warning("Property deleted.")
 
     st.markdown("---")
-    st.subheader("Purchase Details")
-    if st.session_state.selected_property_id is None:
-        st.info("Save a property first.")
-    else:
-        st.caption("Define the purchase terms and financing.")
-        with st.form("purchase_form"):
-            purchase_price = st.number_input("Purchase price ($)", min_value=10000.0, value=300000.0, step=1000.0)
-            down_pct = st.slider("Down payment (%)", 0.0, 100.0, 20.0, 0.5)
-            rate_pct = st.slider("Interest rate - annual (%)", 0.0, 20.0, 5.0, 0.1)
-            amort_years = st.slider("Amortization (years)", 1, 35, 25, 1)
-            closing_pct = st.slider("Closing costs (%)", 0.0, 10.0, 2.0, 0.5)
-            
-            purchase_saved = st.form_submit_button("Save Purchase Details")
-            if purchase_saved:
-                st.session_state.purchase_details = {
-                    "purchase_price": purchase_price,
-                    "down_payment_percent": down_pct,
-                    "annual_interest_percent": rate_pct,
-                    "amort_years": amort_years,
-                    "closing_costs_percent_of_price": closing_pct,
-                }
-                st.success("Purchase details saved!")
-
-    st.markdown("---")
     st.subheader("Income Scenario")
     if st.session_state.selected_property_id is None:
         st.info("Save a property to create income scenarios.")
-    elif "purchase_details" not in st.session_state:
-        st.info("Save purchase details first.")
     else:
-        scenarios = sim_db.list_scenarios(st.session_state.selected_property_id, DB_PATH)
-        scen_options = ["New scenario"] + [f"{s['id']}: {s['name']}" for s in scenarios]
-        
-        # Find the index of the currently selected scenario
-        default_index = 0
-        if st.session_state.selected_scenario_id is not None:
-            for i, opt in enumerate(scen_options):
-                if opt != "New scenario" and int(opt.split(":")[0]) == st.session_state.selected_scenario_id:
-                    default_index = i
-                    break
-        
-        scen_choice = st.selectbox("Select scenario", scen_options, index=default_index)
-
-        if scen_choice == "New scenario":
-            st.session_state.selected_scenario_id = None
-            scen_name = st.text_input("Scenario name", value="Base case")
-            params = {}
+        prop_record = sim_db.get_property(st.session_state.selected_property_id, DB_PATH)
+        required_purchase_fields = [
+            "purchase_price",
+            "down_payment_percent",
+            "annual_interest_percent",
+            "amort_years",
+            "closing_costs_percent_of_price",
+        ]
+        if not prop_record:
+            st.error("Property could not be loaded. Please refresh and try again.")
+        elif any(prop_record.get(k) is None for k in required_purchase_fields):
+            st.info("Add purchase details to the property before creating income scenarios.")
         else:
-            scen_id = int(scen_choice.split(":")[0])
-            st.session_state.selected_scenario_id = scen_id
-            rec = sim_db.get_scenario(scen_id, DB_PATH)
-            scen_name = st.text_input("Scenario name", value=rec["name"])
-            params = rec.get("params") or {}
+            purchase_details = {k: prop_record.get(k) for k in required_purchase_fields}
+            scenarios = sim_db.list_scenarios(st.session_state.selected_property_id, DB_PATH)
+            scen_options = ["New scenario"] + [f"{s['id']}: {s['name']}" for s in scenarios]
 
-        # Scenario param form
-        def getp(k, default):
-            return params.get(k, default)
+            # Find the index of the currently selected scenario
+            default_index = 0
+            if st.session_state.selected_scenario_id is not None:
+                for i, opt in enumerate(scen_options):
+                    if opt != "New scenario" and int(opt.split(":")[0]) == st.session_state.selected_scenario_id:
+                        default_index = i
+                        break
 
-        # Rental type selection - OUTSIDE the form so it updates immediately
-        rental_type = st.radio(
-            "Rental Type",
-            options=["long_term", "short_term"],
-            format_func=lambda x: "Long-term Rental" if x == "long_term" else "Short-term Rental (Airbnb/VRBO)",
-            index=0 if getp("rental_type", "long_term") == "long_term" else 1,
-            horizontal=True,
-            key="rental_type_selector"
-        )
-        
-        with st.form("scenario_form"):
-            st.caption("Define income and expense assumptions. These are saved to SQLite.")
-            
-            st.markdown("---")
-            st.subheader("Revenue")
-            
-            # Conditional inputs based on rental type
-            if rental_type == "long_term":
-                monthly_rent = st.number_input("Monthly rent ($)", min_value=0.0, value=float(getp("monthly_rent", 2200.0)), step=50.0)
-                rent_growth_pct = st.slider("Rent growth per year (%)", 0.0, 15.0, float(getp("rent_growth_percent_per_year", 2.0)), 0.5)
-                vacancy_pct = st.slider("Vacancy (%)", 0.0, 30.0, float(getp("vacancy_percent", 5.0)), 0.5)
-                
-                # Set short-term values to 0
-                nightly_rate = 0.0
-                occupancy_pct = 65.0
-                cleaning_fee = 100.0
-                avg_stay = 3.0
-                platform_fee = 15.0
+            scen_choice = st.selectbox("Select scenario", scen_options, index=default_index)
+
+            if scen_choice == "New scenario":
+                st.session_state.selected_scenario_id = None
+                scen_name = st.text_input("Scenario name", value="Base case")
+                params = {}
             else:
-                nightly_rate = st.number_input("Nightly rate ($)", min_value=0.0, value=float(getp("nightly_rate", 150.0)), step=10.0)
-                occupancy_pct = st.slider("Occupancy rate (%)", 0.0, 100.0, float(getp("occupancy_percent", 65.0)), 1.0)
-                cleaning_fee = st.number_input("Cleaning fee per stay ($)", min_value=0.0, value=float(getp("cleaning_fee_per_stay", 100.0)), step=10.0)
-                avg_stay = st.number_input("Average stay length (nights)", min_value=1.0, value=float(getp("avg_stay_length_nights", 3.0)), step=0.5)
-                platform_fee = st.slider("Platform fees (%)", 0.0, 30.0, float(getp("platform_fee_percent", 15.0)), 0.5)
-                rent_growth_pct = st.slider("Rate growth per year (%)", 0.0, 15.0, float(getp("rent_growth_percent_per_year", 3.0)), 0.5)
-                
-                # Set long-term values to 0
-                monthly_rent = 0.0
-                vacancy_pct = 0.0
+                scen_id = int(scen_choice.split(":")[0])
+                st.session_state.selected_scenario_id = scen_id
+                rec = sim_db.get_scenario(scen_id, DB_PATH)
+                scen_name = st.text_input("Scenario name", value=rec["name"])
+                params = rec.get("params") or {}
 
-            st.markdown("---")
-            st.subheader("Annual expense rates - % of price")
-            tax_pct = st.slider("Property tax (%)", 0.0, 3.0, float(getp("tax_percent_of_price_per_year", 1.2)), 0.1)
-            ins_pct = st.slider("Insurance (%)", 0.0, 3.0, float(getp("insurance_percent_of_price_per_year", 0.6)), 0.1)
-            maint_pct = st.slider("Maintenance (%)", 0.0, 4.0, float(getp("maintenance_percent_of_price_per_year", 1.0)), 0.1)
-            other_monthly = st.number_input("Other monthly costs ($)", min_value=0.0, value=float(getp("other_costs_monthly", 0.0)), step=25.0)
+            # Scenario param form
+            def getp(k, default):
+                return params.get(k, default)
 
-            st.markdown("---")
-            st.subheader("Market assumptions")
-            yrs = st.slider("Simulation horizon (years)", 1, 40, int(getp("years", 20)), 1)
-            appr_pct = st.slider("Appreciation per year (%)", 0.0, 10.0, float(getp("appreciation_percent_per_year", 3.0)), 0.5)
+            # Rental type selection - OUTSIDE the form so it updates immediately
+            rental_type = st.radio(
+                "Rental Type",
+                options=["long_term", "short_term"],
+                format_func=lambda x: "Long-term Rental" if x == "long_term" else "Short-term Rental (Airbnb/VRBO)",
+                index=0 if getp("rental_type", "long_term") == "long_term" else 1,
+                horizontal=True,
+                key="rental_type_selector"
+            )
 
-            form_saved = st.form_submit_button("Save Income Scenario")
-            if form_saved:
-                # Check if purchase details exist
-                if "purchase_details" not in st.session_state:
-                    st.error("⚠️ Please save purchase details first!")
+            with st.form("scenario_form"):
+                st.caption("Define income and expense assumptions. These are saved to SQLite.")
+
+                st.markdown("---")
+                st.subheader("Revenue")
+
+                # Conditional inputs based on rental type
+                if rental_type == "long_term":
+                    monthly_rent = st.number_input("Monthly rent ($)", min_value=0.0, value=float(getp("monthly_rent", 2200.0)), step=50.0)
+                    rent_growth_pct = st.slider("Rent growth per year (%)", 0.0, 15.0, float(getp("rent_growth_percent_per_year", 2.0)), 0.5)
+                    vacancy_pct = st.slider("Vacancy (%)", 0.0, 30.0, float(getp("vacancy_percent", 5.0)), 0.5)
+
+                    # Set short-term values to 0
+                    nightly_rate = 0.0
+                    occupancy_pct = 65.0
+                    cleaning_fee = 100.0
+                    avg_stay = 3.0
+                    platform_fee = 15.0
                 else:
+                    nightly_rate = st.number_input("Nightly rate ($)", min_value=0.0, value=float(getp("nightly_rate", 150.0)), step=10.0)
+                    occupancy_pct = st.slider("Occupancy rate (%)", 0.0, 100.0, float(getp("occupancy_percent", 65.0)), 1.0)
+                    cleaning_fee = st.number_input("Cleaning fee per stay ($)", min_value=0.0, value=float(getp("cleaning_fee_per_stay", 100.0)), step=10.0)
+                    avg_stay = st.number_input("Average stay length (nights)", min_value=1.0, value=float(getp("avg_stay_length_nights", 3.0)), step=0.5)
+                    platform_fee = st.slider("Platform fees (%)", 0.0, 30.0, float(getp("platform_fee_percent", 15.0)), 0.5)
+                    rent_growth_pct = st.slider("Rate growth per year (%)", 0.0, 15.0, float(getp("rent_growth_percent_per_year", 3.0)), 0.5)
+
+                    # Set long-term values to 0
+                    monthly_rent = 0.0
+                    vacancy_pct = 0.0
+
+                st.markdown("---")
+                st.subheader("Annual expense rates - % of price")
+                tax_pct = st.slider("Property tax (%)", 0.0, 3.0, float(getp("tax_percent_of_price_per_year", 1.2)), 0.1)
+                ins_pct = st.slider("Insurance (%)", 0.0, 3.0, float(getp("insurance_percent_of_price_per_year", 0.6)), 0.1)
+                maint_pct = st.slider("Maintenance (%)", 0.0, 4.0, float(getp("maintenance_percent_of_price_per_year", 1.0)), 0.1)
+                other_monthly = st.number_input("Other monthly costs ($)", min_value=0.0, value=float(getp("other_costs_monthly", 0.0)), step=25.0)
+
+                st.markdown("---")
+                st.subheader("Market assumptions")
+                yrs = st.slider("Simulation horizon (years)", 1, 40, int(getp("years", 20)), 1)
+                appr_pct = st.slider("Appreciation per year (%)", 0.0, 10.0, float(getp("appreciation_percent_per_year", 3.0)), 0.5)
+
+                form_saved = st.form_submit_button("Save Income Scenario")
+                if form_saved:
                     # Merge purchase details with scenario params
                     param_dict = {
-                        **st.session_state.purchase_details,
+                        **purchase_details,
                         "rental_type": rental_type,
-                    "monthly_rent": monthly_rent,
-                    "rent_growth_percent_per_year": rent_growth_pct,
-                    "vacancy_percent": vacancy_pct,
-                    "nightly_rate": nightly_rate,
-                    "occupancy_percent": occupancy_pct,
-                    "cleaning_fee_per_stay": cleaning_fee,
-                    "avg_stay_length_nights": avg_stay,
-                    "platform_fee_percent": platform_fee,
-                    "tax_percent_of_price_per_year": tax_pct,
-                    "insurance_percent_of_price_per_year": ins_pct,
-                    "maintenance_percent_of_price_per_year": maint_pct,
-                    "other_costs_monthly": other_monthly,
+                        "monthly_rent": monthly_rent,
+                        "rent_growth_percent_per_year": rent_growth_pct,
+                        "vacancy_percent": vacancy_pct,
+                        "nightly_rate": nightly_rate,
+                        "occupancy_percent": occupancy_pct,
+                        "cleaning_fee_per_stay": cleaning_fee,
+                        "avg_stay_length_nights": avg_stay,
+                        "platform_fee_percent": platform_fee,
+                        "tax_percent_of_price_per_year": tax_pct,
+                        "insurance_percent_of_price_per_year": ins_pct,
+                        "maintenance_percent_of_price_per_year": maint_pct,
+                        "other_costs_monthly": other_monthly,
                         "years": yrs,
                         "appreciation_percent_per_year": appr_pct,
                     }

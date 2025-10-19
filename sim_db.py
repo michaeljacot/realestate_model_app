@@ -21,6 +21,11 @@ CREATE TABLE IF NOT EXISTS properties (
     sqft INTEGER,
     year_built INTEGER,
     notes TEXT,
+    purchase_price REAL,
+    down_payment_percent REAL,
+    annual_interest_percent REAL,
+    amort_years INTEGER,
+    closing_costs_percent_of_price REAL,
     created_at TEXT,
     updated_at TEXT
 );
@@ -61,9 +66,26 @@ def init_db(db_path: str = DEFAULT_DB) -> None:
     conn = connect(db_path)
     try:
         conn.executescript(SCHEMA)
+        _ensure_purchase_columns(conn)
         conn.commit()
     finally:
         conn.close()
+
+
+def _ensure_purchase_columns(conn: sqlite3.Connection) -> None:
+    """Ensure purchase-related columns exist on the properties table."""
+    cur = conn.execute("PRAGMA table_info(properties)")
+    existing = {row[1] for row in cur.fetchall()}
+    columns = [
+        ("purchase_price", "REAL"),
+        ("down_payment_percent", "REAL"),
+        ("annual_interest_percent", "REAL"),
+        ("amort_years", "INTEGER"),
+        ("closing_costs_percent_of_price", "REAL"),
+    ]
+    for name, coltype in columns:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE properties ADD COLUMN {name} {coltype}")
 
 def now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds") + "Z"
@@ -74,7 +96,8 @@ def list_properties(db_path: str = DEFAULT_DB) -> List[Dict[str, Any]]:
     try:
         cur = conn.execute("""
             SELECT id, address, mls_number, latitude, longitude, beds, baths, sqft, year_built, notes,
-                   created_at, updated_at
+                   purchase_price, down_payment_percent, annual_interest_percent, amort_years,
+                   closing_costs_percent_of_price, created_at, updated_at
             FROM properties
             ORDER BY created_at DESC
         """)
@@ -94,23 +117,31 @@ def upsert_property(prop: Dict[str, Any], db_path: str = DEFAULT_DB) -> int:
         if prop.get("id"):
             conn.execute("""
                 UPDATE properties
-                SET address=?, mls_number=?, latitude=?, longitude=?, beds=?, baths=?, sqft=?, year_built=?, notes=?, updated_at=?
+                SET address=?, mls_number=?, latitude=?, longitude=?, beds=?, baths=?, sqft=?, year_built=?, notes=?,
+                    purchase_price=?, down_payment_percent=?, annual_interest_percent=?, amort_years=?,
+                    closing_costs_percent_of_price=?, updated_at=?
                 WHERE id=?
             """, (
                 prop.get("address"), prop.get("mls_number"), prop.get("latitude"), prop.get("longitude"),
                 prop.get("beds"), prop.get("baths"), prop.get("sqft"), prop.get("year_built"), prop.get("notes"),
-                ts, prop["id"]
+                prop.get("purchase_price"), prop.get("down_payment_percent"), prop.get("annual_interest_percent"),
+                prop.get("amort_years"), prop.get("closing_costs_percent_of_price"), ts, prop["id"]
             ))
             conn.commit()
             return int(prop["id"])
         else:
             cur = conn.execute("""
-                INSERT INTO properties (address, mls_number, latitude, longitude, beds, baths, sqft, year_built, notes, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO properties (
+                    address, mls_number, latitude, longitude, beds, baths, sqft, year_built, notes,
+                    purchase_price, down_payment_percent, annual_interest_percent, amort_years,
+                    closing_costs_percent_of_price, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 prop.get("address"), prop.get("mls_number"), prop.get("latitude"), prop.get("longitude"),
                 prop.get("beds"), prop.get("baths"), prop.get("sqft"), prop.get("year_built"), prop.get("notes"),
-                ts, ts
+                prop.get("purchase_price"), prop.get("down_payment_percent"), prop.get("annual_interest_percent"),
+                prop.get("amort_years"), prop.get("closing_costs_percent_of_price"), ts, ts
             ))
             conn.commit()
             return int(cur.lastrowid)
@@ -122,6 +153,28 @@ def delete_property(prop_id: int, db_path: str = DEFAULT_DB) -> None:
     try:
         conn.execute("DELETE FROM properties WHERE id=?", (prop_id,))
         conn.commit()
+    finally:
+        conn.close()
+
+
+def get_property(prop_id: int, db_path: str = DEFAULT_DB) -> Optional[Dict[str, Any]]:
+    conn = connect(db_path)
+    try:
+        cur = conn.execute(
+            """
+            SELECT id, address, mls_number, latitude, longitude, beds, baths, sqft, year_built, notes,
+                   purchase_price, down_payment_percent, annual_interest_percent, amort_years,
+                   closing_costs_percent_of_price, created_at, updated_at
+            FROM properties
+            WHERE id=?
+            """,
+            (prop_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        cols = [c[0] for c in cur.description]
+        return dict(zip(cols, row))
     finally:
         conn.close()
 
