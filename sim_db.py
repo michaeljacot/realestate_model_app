@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS properties (
     annual_interest_percent REAL,
     amort_years INTEGER,
     closing_costs_percent_of_price REAL,
+    map_image_path TEXT,
     created_at TEXT,
     updated_at TEXT
 );
@@ -82,6 +83,7 @@ def _ensure_purchase_columns(conn: sqlite3.Connection) -> None:
         ("annual_interest_percent", "REAL"),
         ("amort_years", "INTEGER"),
         ("closing_costs_percent_of_price", "REAL"),
+        ("map_image_path", "TEXT"),
     ]
     for name, coltype in columns:
         if name not in existing:
@@ -97,7 +99,7 @@ def list_properties(db_path: str = DEFAULT_DB) -> List[Dict[str, Any]]:
         cur = conn.execute("""
             SELECT id, address, mls_number, latitude, longitude, beds, baths, sqft, year_built, notes,
                    purchase_price, down_payment_percent, annual_interest_percent, amort_years,
-                   closing_costs_percent_of_price, created_at, updated_at
+                   closing_costs_percent_of_price, map_image_path, created_at, updated_at
             FROM properties
             ORDER BY created_at DESC
         """)
@@ -119,13 +121,13 @@ def upsert_property(prop: Dict[str, Any], db_path: str = DEFAULT_DB) -> int:
                 UPDATE properties
                 SET address=?, mls_number=?, latitude=?, longitude=?, beds=?, baths=?, sqft=?, year_built=?, notes=?,
                     purchase_price=?, down_payment_percent=?, annual_interest_percent=?, amort_years=?,
-                    closing_costs_percent_of_price=?, updated_at=?
+                    closing_costs_percent_of_price=?, map_image_path=?, updated_at=?
                 WHERE id=?
             """, (
                 prop.get("address"), prop.get("mls_number"), prop.get("latitude"), prop.get("longitude"),
                 prop.get("beds"), prop.get("baths"), prop.get("sqft"), prop.get("year_built"), prop.get("notes"),
                 prop.get("purchase_price"), prop.get("down_payment_percent"), prop.get("annual_interest_percent"),
-                prop.get("amort_years"), prop.get("closing_costs_percent_of_price"), ts, prop["id"]
+                prop.get("amort_years"), prop.get("closing_costs_percent_of_price"), prop.get("map_image_path"), ts, prop["id"]
             ))
             conn.commit()
             return int(prop["id"])
@@ -134,14 +136,14 @@ def upsert_property(prop: Dict[str, Any], db_path: str = DEFAULT_DB) -> int:
                 INSERT INTO properties (
                     address, mls_number, latitude, longitude, beds, baths, sqft, year_built, notes,
                     purchase_price, down_payment_percent, annual_interest_percent, amort_years,
-                    closing_costs_percent_of_price, created_at, updated_at
+                    closing_costs_percent_of_price, map_image_path, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 prop.get("address"), prop.get("mls_number"), prop.get("latitude"), prop.get("longitude"),
                 prop.get("beds"), prop.get("baths"), prop.get("sqft"), prop.get("year_built"), prop.get("notes"),
                 prop.get("purchase_price"), prop.get("down_payment_percent"), prop.get("annual_interest_percent"),
-                prop.get("amort_years"), prop.get("closing_costs_percent_of_price"), ts, ts
+                prop.get("amort_years"), prop.get("closing_costs_percent_of_price"), prop.get("map_image_path"), ts, ts
             ))
             conn.commit()
             return int(cur.lastrowid)
@@ -164,7 +166,7 @@ def get_property(prop_id: int, db_path: str = DEFAULT_DB) -> Optional[Dict[str, 
             """
             SELECT id, address, mls_number, latitude, longitude, beds, baths, sqft, year_built, notes,
                    purchase_price, down_payment_percent, annual_interest_percent, amort_years,
-                   closing_costs_percent_of_price, created_at, updated_at
+                   closing_costs_percent_of_price, map_image_path, created_at, updated_at
             FROM properties
             WHERE id=?
             """,
@@ -289,6 +291,65 @@ def list_runs(scenario_id: int, db_path: str = DEFAULT_DB) -> list:
             WHERE scenario_id=?
             ORDER BY run_at DESC
         """, (scenario_id,))
+        cols = [c[0] for c in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def list_properties_with_latest_run(db_path: str = DEFAULT_DB) -> List[Dict[str, Any]]:
+    """Return properties that have at least one simulation run with the latest run metrics."""
+
+    conn = connect(db_path)
+    try:
+        cur = conn.execute(
+            """
+            SELECT
+                p.id,
+                p.address,
+                p.mls_number,
+                p.latitude,
+                p.longitude,
+                p.beds,
+                p.baths,
+                p.sqft,
+                p.year_built,
+                p.notes,
+                p.purchase_price,
+                p.down_payment_percent,
+                p.annual_interest_percent,
+                p.amort_years,
+                p.closing_costs_percent_of_price,
+                p.map_image_path,
+                p.created_at,
+                p.updated_at,
+                r.id AS run_id,
+                r.run_at,
+                r.monthly_mortgage,
+                r.initial_coc,
+                r.ending_monthly_cf,
+                r.cumulative_cf,
+                r.terminal_equity,
+                r.total_invested_est,
+                r.total_return_est,
+                r.payback_month,
+                r.csv_path,
+                s.id AS scenario_id,
+                s.name AS scenario_name
+            FROM properties p
+            JOIN scenarios s ON s.property_id = p.id
+            JOIN runs r ON r.scenario_id = s.id
+            WHERE r.id = (
+                SELECT r2.id
+                FROM runs r2
+                JOIN scenarios s2 ON s2.id = r2.scenario_id
+                WHERE s2.property_id = p.id
+                ORDER BY r2.run_at DESC, r2.id DESC
+                LIMIT 1
+            )
+            ORDER BY r.run_at DESC, r.id DESC
+        """
+        )
         cols = [c[0] for c in cur.description]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
     finally:
